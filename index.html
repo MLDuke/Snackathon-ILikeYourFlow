@@ -1,0 +1,2247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Bloom</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 100vw; height: 100vh;
+    overflow: hidden;
+    background: #0a0a0a;
+
+  }
+  #c { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2; }
+  #label {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; letter-spacing: 0.18em; color: rgba(255,255,255,0.25);
+    z-index: 20; pointer-events: none; transition: opacity 0.6s;
+  }
+  #btn {
+    background: none; border: none; padding: 0;
+    cursor: pointer; display: block;
+    transition: opacity 0.4s;
+    position: relative; z-index: 2;
+  }
+  #btn:hover { filter: brightness(1.3); }
+  #btn.hidden { opacity: 0; pointer-events: none; }
+  #debugCanvas {
+    position: fixed; top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    pointer-events: none;
+    opacity: 0; transition: opacity 0.3s;
+    z-index: 1;
+  }
+  #debugCanvas.visible { opacity: 1; }
+
+
+  /* ── Controls overlay ──────────────────────────────────────────── */
+
+  #controls select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: rgba(255,255,255,0.8);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; letter-spacing: 0.08em;
+    padding: 4px 6px;
+    cursor: pointer;
+    outline: none;
+    max-width: 200px;
+  }
+  #controls select:hover { border-color: rgba(255,255,255,0.4); }
+  #controls select option { background: #111; }
+  #pixelSlider {
+    -webkit-appearance: none;
+    width: 100px; height: 2px;
+    background: rgba(255,255,255,0.15);
+    outline: none; cursor: pointer;
+  }
+  #pixelSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+  }
+  #pixelSlider::-moz-range-thumb {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: #fff; border: none;
+    cursor: pointer;
+  }
+  #pixelVal { min-width: 18px; text-align: right; color: rgba(255,255,255,0.7); }
+  #marchToggle {
+    accent-color: #fff;
+    width: 11px; height: 11px;
+    cursor: pointer;
+  }
+  #marchSpeed {
+    -webkit-appearance: none;
+    width: 70px; height: 2px;
+    background: rgba(255,255,255,0.15);
+    outline: none; cursor: pointer;
+  }
+  #marchSpeed::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px; height: 10px;
+    border-radius: 50%; background: #fff; cursor: pointer;
+  }
+  #marchSpeedLabel { transition: opacity 0.2s; }
+
+  /* ── Minimap / trackpad panel ──────────────────────────────────── */
+  #minimap {
+    position: fixed;
+    top: 14px; left: 14px;
+    z-index: 25;
+    background: rgba(10,10,10,0.82);
+    border: 1px solid rgba(255,255,255,0.1);
+    backdrop-filter: blur(8px);
+    user-select: none;
+  }
+  #minimapArea {
+    position: relative;
+    width: 100%; aspect-ratio: 1;
+    cursor: crosshair;
+    overflow: hidden;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  /* Source dot — larger, dithered pixel circle drawn on a canvas */
+  #minimapDot {
+    position: absolute;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 5px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 3;
+  }
+  #minimapDotCanvas {
+    display: block;
+    transition: transform 0.1s;
+  }
+  #minimapDot.active #minimapDotCanvas { transform: scale(1.12); }
+  #minimapDotLabel {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 0.2em;
+    color: rgba(255,255,255,0.55);
+    text-transform: uppercase;
+    line-height: 1;
+  }
+  #minimapDot.active #minimapDotLabel { color: rgba(255,255,255,0.9); }
+
+  /* Crosshair lines — drawn as siblings inside #minimapArea via JS-set CSS vars */
+  #minimapCrosshairV {
+    position: absolute; top: 0; bottom: 0;
+    width: 1px; background: rgba(255,255,255,0.1);
+    pointer-events: none; z-index: 2;
+    transform: translateX(-50%);
+  }
+  #minimapCrosshairH {
+    position: absolute; left: 0; right: 0;
+    height: 1px; background: rgba(255,255,255,0.1);
+    pointer-events: none; z-index: 2;
+    transform: translateY(-50%);
+  }
+
+
+  /* ── Dot context menu ───────────────────────────────────────────── */
+  #dotMenu {
+    position: fixed;
+    z-index: 100;
+    background: rgba(10,10,10,0.92);
+    border: 1px solid rgba(255,255,255,0.15);
+    backdrop-filter: blur(10px);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    color: rgba(255,255,255,0.7);
+    min-width: 130px;
+    padding: 4px 0;
+    display: none;
+    user-select: none;
+  }
+  #dotMenu.open { display: block; }
+  .dotMenuItem {
+    padding: 8px 14px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    transition: background 0.1s, color 0.1s;
+    white-space: nowrap;
+  }
+  .dotMenuItem:hover { background: rgba(255,255,255,0.08); color: #fff; }
+  .dotMenuItem .menuIcon {
+    width: 14px; text-align: center;
+    opacity: 0.6; font-style: normal;
+  }
+  .dotMenuItem.active-item .menuIcon { opacity: 1; }
+  .dotMenuItem.active-item { color: #fff; }
+  .menuDivider {
+    height: 1px; background: rgba(255,255,255,0.08); margin: 3px 0;
+  }
+
+  /* ── Theme panel ────────────────────────────────────────────────── */
+  #themeRow {
+    display: flex; align-items: center;
+    padding: 8px 10px 6px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    cursor: pointer;
+    gap: 8px;
+    user-select: none;
+    transition: background 0.12s;
+  }
+  #themeRow:hover { background: rgba(255,255,255,0.04); }
+  #themeTrigger {
+    display: flex; align-items: center; gap: 8px;
+    flex: 1;
+    background: none; border: none; outline: none;
+    color: rgba(255,255,255,0.5);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em;
+    cursor: pointer;
+    padding: 0; text-align: left;
+    transition: color 0.12s;
+  }
+  #themeRow:hover #themeTrigger,
+  #themeRow.open #themeTrigger { color: rgba(255,255,255,0.9); }
+  #themeCaret {
+    font-size: 8px; color: rgba(255,255,255,0.3);
+    transition: transform 0.15s, color 0.12s;
+  }
+  #themeRow.open #themeCaret { transform: rotate(180deg); color: rgba(255,255,255,0.6); }
+  #themeTriggerSwatches {
+    display: flex; gap: 2px; align-items: center;
+  }
+  #themeTriggerSwatches span {
+    width: 6px; height: 6px; border-radius: 50%; display: inline-block;
+  }
+  #themePanel {
+    position: fixed;
+    z-index: 200;
+    background: rgba(10,10,10,0.96);
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(14px);
+    padding: 4px 0;
+    display: none;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; letter-spacing: 0.1em;
+    min-width: 200px;
+    max-height: 320px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  }
+  #themePanel::-webkit-scrollbar { display: none; }
+  #themePanel.open { display: block; }
+  .themePanelItem {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 14px;
+    cursor: pointer;
+    color: rgba(255,255,255,0.55);
+    transition: background 0.1s, color 0.1s;
+    user-select: none;
+  }
+  .themePanelItem:hover { background: rgba(255,255,255,0.07); color: #fff; }
+  .themePanelItem.selected { color: #fff; }
+  .themePanelItem.selected .tpSwatches { opacity: 1; }
+  .tpName { flex: 1; }
+  .tpSwatches {
+    display: flex; gap: 2px; opacity: 0.7;
+    transition: opacity 0.1s;
+  }
+  .tpSwatches span {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  }
+  .themePanelItem:hover .tpSwatches { opacity: 1; }
+  .themePanelDivider {
+    height: 1px; background: rgba(255,255,255,0.07); margin: 4px 0;
+  }
+  .themePanelSection {
+    padding: 4px 14px 2px;
+    font-size: 8px; letter-spacing: 0.2em;
+    color: rgba(255,255,255,0.25);
+    text-transform: uppercase;
+  }
+
+
+  /* ── Generation history ─────────────────────────────────────────── */
+  #historyRow {
+    border-top: 1px solid rgba(255,255,255,0.07);
+    padding: 7px 10px 6px;
+    display: none; /* hidden until first generation */
+  }
+  #historyRow.visible { display: block; }
+  #historyLabel {
+    font-family: 'Space Mono', monospace;
+    font-size: 8px; letter-spacing: 0.2em;
+    color: rgba(255,255,255,0.25);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  #historyList {
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .historyItem {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 4px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: background 0.1s;
+  }
+  .historyItem:hover { background: rgba(255,255,255,0.06); }
+  .historyItem.active-history { background: rgba(255,255,255,0.04); }
+  .historySwatches {
+    display: flex; gap: 2px; flex-shrink: 0;
+  }
+  .historySwatches span {
+    width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+  }
+  .historyName {
+    font-family: 'Space Mono', monospace;
+    font-size: 8px; letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.45);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; flex: 1;
+    min-width: 0;
+    transition: color 0.1s;
+  }
+  .historyItem:hover .historyName { color: rgba(255,255,255,0.85); }
+  .historyItem.active-history .historyName { color: rgba(255,255,255,0.7); }
+  .historyIndex {
+    font-family: 'Space Mono', monospace;
+    font-size: 8px;
+    color: rgba(255,255,255,0.18);
+    flex-shrink: 0; width: 10px; text-align: right;
+  }
+
+
+  /* ── Inline controls inside minimap ─────────────────────────────── */
+  .minimapControl {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em;
+    color: rgba(255,255,255,0.35);
+    user-select: none;
+  }
+  .minimapControlLabel { flex-shrink: 0; min-width: 42px; }
+  .minimapSlider {
+    -webkit-appearance: none;
+    flex: 1; height: 2px;
+    background: rgba(255,255,255,0.15);
+    outline: none; cursor: pointer;
+  }
+  .minimapSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px; height: 10px;
+    border-radius: 50%; background: #fff; cursor: pointer;
+  }
+  .minimapSlider::-moz-range-thumb {
+    width: 10px; height: 10px;
+    border-radius: 50%; background: #fff; border: none; cursor: pointer;
+  }
+  .minimapControlVal {
+    min-width: 24px; text-align: right;
+    color: rgba(255,255,255,0.6); flex-shrink: 0;
+  }
+  #minimapMarchSpeedRow { transition: opacity 0.2s; }
+
+  /* field select inside minimap */
+  .minimapControl select {
+    flex: 1;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.75);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 0.08em;
+    padding: 3px 4px;
+    cursor: pointer; outline: none;
+    min-width: 0;
+  }
+  .minimapControl select:hover { border-color: rgba(255,255,255,0.3); }
+  .minimapControl select option { background: #111; }
+
+
+
+  /* ── Panel expand / collapse ────────────────────────────────────── */
+  #panelFooter {
+    display: flex; align-items: center;
+    border-top: 1px solid rgba(255,255,255,0.07);
+    user-select: none;
+  }
+  #panelSaveSimple {
+    flex: 1;
+    background: none; border: none; border-right: 1px solid rgba(255,255,255,0.07);
+    color: rgba(255,255,255,0.45);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em;
+    padding: 8px 10px;
+    cursor: pointer; outline: none; text-align: left;
+    transition: color 0.12s, background 0.12s;
+  }
+  #panelSaveSimple:hover { color: rgba(255,255,255,0.9); background: rgba(255,255,255,0.04); }
+  #panelExpandBtn {
+    background: none; border: none; outline: none;
+    color: rgba(255,255,255,0.3);
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em;
+    padding: 8px 10px;
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+    white-space: nowrap; display: flex; align-items: center; gap: 6px;
+  }
+  #panelExpandBtn:hover { color: rgba(255,255,255,0.9); background: rgba(255,255,255,0.04); }
+  #expandCaret {
+    font-size: 8px;
+    transition: transform 0.2s;
+  }
+  #minimap.expanded #expandCaret { transform: rotate(180deg); }
+  #advancedPanel {
+    display: none;
+    border-top: 1px solid rgba(255,255,255,0.07);
+  }
+  #minimap.expanded #advancedPanel { display: block; }
+
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="debugCanvas"></canvas>
+<div id="label"></div>
+
+<!-- Trackpad panel -->
+<div id="minimap">
+  <div id="minimapArea">
+    <div id="minimapCrosshairV"></div>
+    <div id="minimapCrosshairH"></div>
+    <div id="minimapDot">
+      <canvas id="minimapDotCanvas"></canvas>
+      <span id="minimapDotLabel">generate</span>
+    </div>
+  </div>
+  <!-- Simple footer — always visible -->
+  <div id="panelFooter">
+    <button id="panelSaveSimple">save image</button>
+    <button id="panelExpandBtn">
+      controls <span id="expandCaret">▾</span>
+    </button>
+  </div>
+
+  <!-- Advanced panel — hidden until expanded -->
+  <div id="advancedPanel">
+    <div class="minimapControl" id="minimapFieldRow">
+      <span class="minimapControlLabel">field</span>
+      <select id="fieldSelect2">
+        <option value="random">— random —</option>
+        <option value="0">smoke ring</option>
+        <option value="1">whirlpool</option>
+        <option value="2">static storm</option>
+        <option value="3">four point star</option>
+        <option value="4">teardrop</option>
+        <option value="5">butterfly</option>
+        <option value="6">crystal</option>
+        <option value="7">sine wave</option>
+        <option value="8">crosscurrent</option>
+        <option value="9">vortex</option>
+        <option value="10">hypnosis</option>
+        <option value="11">radial burst</option>
+        <option value="12">circuit</option>
+        <option value="13">woven</option>
+        <option value="14">tangled</option>
+        <option value="15">fractal bloom</option>
+        <option value="16">interference</option>
+        <option value="17">pulse</option>
+        <option value="18">compass</option>
+        <option value="19">galaxy</option>
+        <option value="20">erosion</option>
+        <option value="21">aurora</option>
+      </select>
+    </div>
+    <div class="minimapControl" id="minimapDensityRow">
+      <span class="minimapControlLabel">density</span>
+      <input class="minimapSlider" id="pixelSlider2" type="range" min="2" max="20" value="6" step="1">
+      <span class="minimapControlVal" id="pixelVal2">6px</span>
+    </div>
+    <div class="minimapControl" id="minimapMarchRow">
+      <span class="minimapControlLabel">march</span>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;">
+        <input type="checkbox" id="marchToggle2" style="accent-color:#fff;width:11px;height:11px;cursor:pointer;">
+      </label>
+    </div>
+    <div class="minimapControl" id="minimapMarchSpeedRow" style="opacity:0.3;pointer-events:none;">
+      <span class="minimapControlLabel">march spd</span>
+      <input class="minimapSlider" id="marchSpeed2" type="range" min="1" max="10" value="3" step="1">
+    </div>
+    <div id="themeRow">
+      <button id="themeTrigger">
+        <span id="themeTriggerLabel">theme</span>
+        <span id="themeTriggerSwatches"></span>
+      </button>
+      <span id="themeCaret">▾</span>
+    </div>
+    <div id="historyRow">
+      <div id="historyLabel">recent</div>
+      <div id="historyList"></div>
+    </div>
+    <div class="minimapControl" id="minimapSaveRow">
+      <span class="minimapControlLabel">export</span>
+      <button id="saveImageBtn" style="
+        flex:1; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15);
+        color:rgba(255,255,255,0.6); font-family:'Space Mono',monospace;
+        font-size:9px; letter-spacing:0.12em; padding:4px 8px; cursor:pointer;
+        transition:background 0.15s,color 0.15s; outline:none;
+      ">save image</button>
+    </div>
+  </div>
+</div>
+
+<!-- Dot right-click menu -->
+<div id="dotMenu">
+  <div class="dotMenuItem" id="menuMarch"><span class="menuIcon">○</span> march</div>
+  <div class="menuDivider"></div>
+  <div class="dotMenuItem" id="menuReset"><span class="menuIcon">↺</span> reset</div>
+</div>
+
+<input type="checkbox" id="marchToggle" style="display:none;">
+
+<!-- Theme overlay panel -->
+<div id="themePanel"></div>
+
+
+<script>
+// ─── Perlin noise (simplex-style, 2D) ─────────────────────────────────────────
+// Simple value noise with smoothstep interpolation — good enough as Perlin proxy
+const permTable = (() => {
+  const p = Array.from({length:256},(_,i)=>i);
+  for(let i=255;i>0;i--){const j=Math.floor(Math.random()*(i+1));[p[i],p[j]]=[p[j],p[i]];}
+  return [...p,...p];
+})();
+
+function fade(t){ return t*t*t*(t*(t*6-15)+10); }
+function lerp(a,b,t){ return a+t*(b-a); }
+function grad(h,x,y){
+  const v=h&3;
+  const u=v<2?x:y, w=v<2?y:x;
+  return ((h&1)?-u:u)+((h&2)?-w:w);
+}
+function noise2(x,y){
+  const X=Math.floor(x)&255, Y=Math.floor(y)&255;
+  const xf=x-Math.floor(x), yf=y-Math.floor(y);
+  const u=fade(xf), v=fade(yf);
+  const a=permTable[X]+Y, b=permTable[X+1]+Y;
+  return lerp(
+    lerp(grad(permTable[a],xf,yf), grad(permTable[b],xf-1,yf),u),
+    lerp(grad(permTable[a+1],xf,yf-1), grad(permTable[b+1],xf-1,yf-1),u),
+    v
+  );
+}
+// Map noise to [-1,1]
+function n(x,y){ return noise2(x,y); }   // raw [-~0.7,~0.7]
+function nm(x,y){ return noise2(x,y)*1.42; } // approx [-1,1]
+
+// ─── Parametric curve helpers ─────────────────────────────────────────────────
+function circle(t)    { return [Math.cos(t), Math.sin(t)]; }
+function astroid(t)   { const s=Math.sin(t),c=Math.cos(t); return [s*s*s, c*c*c]; }
+function cissoid(t)   { const s2=2*Math.sin(t)**2; return [s2, s2*Math.tan(t)]; }
+function kampyle(t)   { const sec=1/Math.sin(t); return [sec, Math.tan(t)*sec]; }
+function rectHyp(t)   { return [1/Math.sin(t), Math.tan(t)]; }
+function superformula(t, m=6, n1=1, n2=7, n3=8){
+  const f1=Math.pow(Math.abs(Math.cos(m*t/4)),n2);
+  const f2=Math.pow(Math.abs(Math.sin(m*t/4)),n3);
+  const fr=Math.pow(f1+f2,-1/n1);
+  return [Math.cos(t)*fr, Math.sin(t)*fr];
+}
+
+// ─── Flame variation helpers ──────────────────────────────────────────────────
+function sinusoidal([x,y], w=1){ return [w*Math.sin(x), w*Math.sin(y)]; }
+function waves2([x,y], w=1){ return [w*(x+0.9*Math.sin(y*4)), w*(y+0.5*Math.sin(x*5.555))]; }
+function polar([x,y], w=1){
+  const r=Math.sqrt(x*x+y*y), theta=Math.atan2(x,y);
+  return [w*theta/Math.PI, w*(r-2)];
+}
+function swirl([x,y], w=1){
+  const r2=x*x+y*y, s=Math.sin(r2), c=Math.cos(r2);
+  return [w*0.8*(s*x-c*y), w*0.8*(c*y+s*y)];
+}
+function hyperbolic([x,y], w=1){
+  const r=Math.sqrt(x*x+y*y)+1e-10, theta=Math.atan2(x,y);
+  return [w*Math.sin(theta)/r, w*Math.cos(theta)*r];
+}
+function powerV([x,y], w=1){
+  const theta=Math.atan2(y,x), s=Math.sin(theta), c=Math.cos(theta);
+  const pw=w*Math.pow(Math.sqrt(x*x+y*y),s);
+  return [pw*c, pw*s];
+}
+function cosineV([x,y], w=1){
+  const px=x*Math.PI;
+  return [w*0.8*Math.cos(px)*Math.cosh(y), -w*0.8*Math.sin(px)*Math.sinh(y)];
+}
+function cross([x,y], w=1){
+  const r=Math.sqrt(1/(Math.pow(x*x-y*y,2)+1e-10));
+  return [w*0.8*x*r, w*0.8*y*r];
+}
+function vexp([x,y], w=1){
+  const r=w*Math.exp(x);
+  return [r*Math.cos(y), r*Math.sin(y)];
+}
+function pdj([x,y], w=1, a=0.1, b=1.9, c=-0.8, d=-1.2){
+  return [w*(Math.sin(a*y)-Math.cos(b*x)), w*(Math.sin(c*x)-Math.cos(d*y))];
+}
+Math.cosh = Math.cosh || (x=>0.5*(Math.exp(x)+Math.exp(-x)));
+Math.sinh = Math.sinh || (x=>0.5*(Math.exp(x)-Math.exp(-x)));
+
+function angleBetween([ax,ay],[bx,by]){
+  const dot=ax*bx+ay*by;
+  const mag=Math.sqrt((ax*ax+ay*ay)*(bx*bx+by*by))+1e-10;
+  return Math.acos(Math.max(-1,Math.min(1,dot/mag)));
+}
+function sub([ax,ay],[bx,by]){ return [ax-bx, ay-by]; }
+function normalize([x,y]){ const m=Math.sqrt(x*x+y*y)+1e-10; return [x/m,y/m]; }
+
+// ─── FIELD MODES ──────────────────────────────────────────────────────────────
+// Each mode: {name, fn(col,row,ox,oy,seed) -> [vx,vy]}
+// ox,oy = origin (button center in grid coords), seed = random phase
+
+const FIELD_MODES = [
+
+  { name: 'smoke ring',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.12+s, y=(r-oy)*0.12+s*1.3;
+      const t = Math.PI*2 * nm(x,y);
+      return circle(t);
+    }
+  },
+
+  { name: 'whirlpool',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.08+s, y=(r-oy)*0.08+s*0.7;
+      const t = 8 * nm(x/5,y/5);
+      return circle(t);
+    }
+  },
+
+  { name: 'static storm',  // p5art chained noise
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.05+1+s, y=(r-oy)*0.05+1+s;
+      const n1=10*noise2(x,y);
+      const n2=5*noise2(n1,n1);
+      const n3=325*nm(n2,n2);
+      return circle(n3);
+    }
+  },
+
+  { name: 'four point star',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.10+s, y=(r-oy)*0.10+s;
+      const t=5*nm(x,y);
+      return astroid(t);
+    }
+  },
+
+  { name: 'teardrop',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.10+s, y=(r-oy)*0.10+s;
+      const t=3*nm(x,y);
+      const [vx,vy]=cissoid(t);
+      return [isFinite(vx)?vx:0, isFinite(vy)?vy:0];
+    }
+  },
+
+  { name: 'butterfly',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.08+s, y=(r-oy)*0.08+s;
+      const t=6*nm(x,y);
+      const [vx,vy]=kampyle(t);
+      return [isFinite(vx)?vx:0, isFinite(vy)?vy:0];
+    }
+  },
+
+  { name: 'crystal',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.09+s, y=(r-oy)*0.09+s;
+      const t=5*nm(x,y);
+      return superformula(t);
+    }
+  },
+
+  { name: 'sine wave',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.1+s, y=(r-oy)*0.1+s;
+      return sinusoidal([x,y],1);
+    }
+  },
+
+  { name: 'crosscurrent',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.07+s, y=(r-oy)*0.07+s;
+      return waves2([x,y],1);
+    }
+  },
+
+  { name: 'vortex',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.09+s, y=(r-oy)*0.09+s;
+      return swirl([x,y],1);
+    }
+  },
+
+  { name: 'hypnosis',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.10+s, y=(r-oy)*0.10+s;
+      return hyperbolic([x,y],1);
+    }
+  },
+
+  { name: 'radial burst',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.06+s, y=(r-oy)*0.06+s;
+      const [vx,vy]=vexp([x,y],0.5);
+      return [isFinite(vx)?vx:0, isFinite(vy)?vy:0];
+    }
+  },
+
+  { name: 'circuit',
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.08+s, y=(r-oy)*0.08+s;
+      return pdj([x,y],1);
+    }
+  },
+
+  { name: 'woven',  // blog variant 2
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.05+1+s, y=(r-oy)*0.05+1+s;
+      const n1=15*nm(x/20,y/20);
+      const [cx1,cy1]=cissoid(n1), [ax,ay]=astroid(n1);
+      const n2a=5*noise2(cx1,ay), n2b=5*noise2(ax,cy1);
+      const n3=10*nm(n2a,n2b/3);
+      return circle(n3);
+    }
+  },
+
+  { name: 'tangled',  // blog variant 3
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.06+s, y=(r-oy)*0.06+s;
+      const n1=15*nm(x/10,y/10);
+      const [hx,hy]=rectHyp(n1), [ax,ay]=astroid(n1);
+      const va=[isFinite(hx)?hx:0,isFinite(hy)?hy:0];
+      const vb=[ax,ay];
+      const n2a=2*nm(va[0],va[1]);
+      const n2b=2*nm(vb[0],vb[1]);
+      return [n2a,n2b];
+    }
+  },
+
+  { name: 'fractal bloom',  // blog variant 4
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.08+s, y=(r-oy)*0.08+s;
+      const [kx,ky]=kampyle(x);
+      const [sx,sy]=superformula(y);
+      const ka=[isFinite(kx)?kx:0,isFinite(ky)?ky:0];
+      const sa=[sx,sy];
+      const n2a=3*nm(ka[0],ka[1]);
+      const n2b=3*nm(sa[0],sa[1]);
+      return [Math.cos(n2a), Math.sin(n2b)];
+    }
+  },
+
+  { name: 'interference',  // blog variant 5
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.06+s, y=(r-oy)*0.06+s;
+      const n1a=3*nm(x,y), n1b=3*nm(y,x);
+      const [hx,hy]=rectHyp(n1a), [ax,ay]=astroid(n1b);
+      const n2a=3*nm(isFinite(hx)?hx:0,isFinite(hy)?hy:0);
+      const n2b=3*nm(ax,ay);
+      return [Math.cos(n2a), Math.sin(n2b)];
+    }
+  },
+
+  { name: 'pulse',  // blog all-together variant 3
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.05+s, y=(r-oy)*0.05+s;
+      const [e1x,e1y]=vexp([x,y],0.5);
+      const ex=isFinite(e1x)?e1x:0, ey=isFinite(e1y)?e1y:0;
+      const n1=nm(ex,ey), n2=nm(ey,ex);
+      const [e2x,e2y]=vexp([n1,n2],0.8);
+      return [isFinite(e2x)?e2x:0, isFinite(e2y)?e2y:0];
+    }
+  },
+
+  { name: 'compass',  // blog all-together variant 4
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.07+s, y=(r-oy)*0.07+s;
+      const p1=polar(cross([x,y],1),1);
+      const n1=15*nm(p1[0],p1[1]);
+      const [cx2,cy2]=cissoid(n1);
+      return normalize([isFinite(cx2)?cx2:0, isFinite(cy2)?cy2:0]);
+    }
+  },
+
+  { name: 'galaxy',  // blog all-together variant 7 (simplified)
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.07+s, y=(r-oy)*0.07+s;
+      const v1=swirl([x,y],1);
+      const v2=sub(v1,[x,y]);
+      const n1=atan2safe(v1[1],v1[0])+nm(v1[0],v1[1]);
+      const n2=atan2safe(v2[1],v2[0])+nm(v2[0],v2[1]);
+      const sf1=superformula(n1), sf2=rectHyp(n2);
+      const w1=waves2(sf1,1), s1=sinusoidal([isFinite(sf2[0])?sf2[0]:0,isFinite(sf2[1])?sf2[1]:0],1);
+      const d=sub(s1,w1);
+      const an=angleBetween(d,[n1,n2]);
+      return [Math.cos(v2[0]+Math.sin(an)), Math.sin(d[1]-Math.cos(an))];
+    }
+  },
+
+  { name: 'erosion',  // blog variant 6
+    fn(c,r,ox,oy,s){
+      const x=(c-ox)*0.07+s, y=(r-oy)*0.07+s;
+      const v1=waves2([x,y],1);
+      const v2=sub(v1,[x,y]);
+      const n1=8*noise2(s)*atan2safe(v1[1],v1[0]);
+      const n2=8*noise2(s+0.5)*atan2safe(v2[1],v2[0]);
+      return [Math.cos(v2[0]*n1), Math.sin(v1[1]+n2)];
+    }
+  },
+
+  { name: 'aurora',  // our original with curl arms
+    fn(c,r,ox,oy,s){
+      const dx=c-ox, dy=r-oy;
+      const dist=Math.sqrt(dx*dx+dy*dy)+1e-4;
+      const rx=dx/dist, ry=dy/dist;
+      const curl=0.55*Math.sin(dist*0.18+s);
+      const nx=c*0.11+s*1.3, ny=r*0.11+s*0.7;
+      const wx=Math.sin(ny+Math.cos(nx*0.7))*0.4;
+      const wy=Math.cos(nx+Math.sin(ny*0.7))*0.4;
+      return [rx-ry*curl+wx, ry+rx*curl+wy];
+    }
+  },
+
+];
+
+function atan2safe(y,x){ return Math.atan2(isFinite(y)?y:0, isFinite(x)?x:0); }
+
+// ─── Main canvas ──────────────────────────────────────────────────────────────
+let CELL = 6;
+const BG = '#0a0a0a';
+// ─── Theme library ────────────────────────────────────────────────────────────
+// Each theme: { name, colors[] }
+// colors is 6 swatches. buildPalette() randomly voids 1–3 to create negative space.
+const THEMES = [
+  // ── Monotone ────────────────────────────────────────────────────────────
+  // Pure white spectrum — luminance steps only, maps field angles to pure light
+  { name: 'halogen',
+    colors: ['#ffffff','#e8e8e8','#c0c0c0','#989898','#606060','#303030'] },
+
+  // Single warm hue — field structure reads as amber depth
+  { name: 'amber',
+    colors: ['#fff8e1','#ffe082','#ffb300','#e65100','#bf360c','#3e2723'] },
+
+  // Cold blue monochrome — ice, circuit, silence
+  { name: 'cryogen',
+    colors: ['#e3f2fd','#90caf9','#1e88e5','#0d47a1','#01579b','#002171'] },
+
+  // Mossy earthy green — lichen, damp stone, old growth
+  { name: 'moss',
+    colors: ['#0c1a0a','#1a3a1a','#326b2a','#4e8c3a','#7ab855','#aaff44'] },
+
+  // ── Complex / Field-rewarding ────────────────────────────────────────────
+  // Opposing spectral poles collide — cyan/magenta with mid-amber bridge
+  { name: 'refraction',
+    colors: ['#00f5ff','#0088cc','#ffaa00','#ff4400','#cc00ff','#004488'] },
+
+  // Geological strata — ochre, oxide, malachite, slate, bone
+  { name: 'strata',
+    colors: ['#e8d5a3','#c4692a','#2d6a4f','#4a5568','#f7f3e9','#8b1a1a'] },
+
+  // Thermal imaging — from deep violet cold to yellow-white hot
+  { name: 'thermal',
+    colors: ['#0d0030','#2e00a8','#cc0044','#ff6600','#ffee00','#ffffff'] },
+
+  // Bioluminescent deep water — near-black with electric bio-glows
+  { name: 'abyss',
+    colors: ['#000a14','#002244','#00ffcc','#0044ff','#00ff66','#003322'] },
+
+  // Risograph overprint — limited ink palette, ink-on-paper collision
+  { name: 'risograph',
+    colors: ['#e8272d','#f5a800','#2f4ca1','#00a896','#f5f0e8','#1a1a2e'] },
+];
+
+let currentTheme = null; // set to a THEMES entry or null for random
+
+// Build a working palette from a theme, voiding 1–3 slots to negative space
+function buildPalette(base) {
+  const p = [...base];
+  const count = 1 + Math.floor(Math.random() * 3);
+  const indices = [];
+  while (indices.length < count) {
+    const i = Math.floor(Math.random() * p.length);
+    if (!indices.includes(i)) indices.push(i);
+  }
+  indices.forEach(i => p[i] = BG);
+  return p;
+}
+
+function pickPalette() {
+  if (currentTheme) return buildPalette(currentTheme.colors);
+  return buildPalette(THEMES[Math.floor(Math.random() * THEMES.length)].colors);
+}
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const label = document.getElementById('label');
+
+let cols, rows, grid, frontier, animating = false;
+let currentPalette, currentMode, fieldSeed;
+let fieldOriginCol = 0, fieldOriginRow = 0;
+let colorGrid = null; // kept alive after bloom for drag-remapping
+let bloomComplete = false; // true once canvas is fully grown
+
+// ─── Button ───────────────────────────────────────────────────────────────────
+function drawButton(state = 'default') {
+  const bc = document.getElementById('minimapDotCanvas');
+  if (!bc) return;
+  const SIZE = 44;
+  bc.width = SIZE; bc.height = SIZE;
+  bc.style.width  = SIZE + 'px';
+  bc.style.height = SIZE + 'px';
+  const bctx = bc.getContext('2d');
+  bctx.clearRect(0, 0, SIZE, SIZE);
+  const cx = SIZE / 2, cy = SIZE / 2, r = SIZE / 2 - 2;
+
+  if (state === 'primed') {
+    // First click — filled white bg, dark stroke
+    bctx.beginPath();
+    bctx.arc(cx, cy, r, 0, Math.PI * 2);
+    bctx.fillStyle = 'rgba(255,255,255,0.92)';
+    bctx.fill();
+  } else if (state === 'confirm') {
+    // Second click — green fill with checkmark
+    bctx.beginPath();
+    bctx.arc(cx, cy, r, 0, Math.PI * 2);
+    bctx.fillStyle = '#3ddc84';
+    bctx.fill();
+    // Checkmark
+    bctx.beginPath();
+    bctx.moveTo(cx - 9, cy + 1);
+    bctx.lineTo(cx - 3, cy + 7);
+    bctx.lineTo(cx + 9, cy - 7);
+    bctx.strokeStyle = '#0a1a0a';
+    bctx.lineWidth = 2.5;
+    bctx.lineCap = 'round';
+    bctx.lineJoin = 'round';
+    bctx.stroke();
+  } else {
+    // Default — outline only
+    bctx.beginPath();
+    bctx.arc(cx, cy, r, 0, Math.PI * 2);
+    bctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    bctx.lineWidth = 1.5;
+    bctx.stroke();
+  }
+}
+
+function resize(){
+  canvas.width=window.innerWidth;
+  canvas.height=window.innerHeight;
+  cols=Math.ceil(canvas.width/CELL);
+  rows=Math.ceil(canvas.height/CELL);
+}
+
+function init(){
+  resize();
+  grid=new Uint8Array(cols*rows);
+  frontier=[];
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  currentPalette=pickPalette();
+  currentMode=FIELD_MODES[Math.floor(Math.random()*FIELD_MODES.length)];
+  drawButton();
+  label.textContent='';
+  if (typeof drawMinimap === 'function') drawMinimap();
+}
+
+function idx(c,r){ return r*cols+c; }
+
+const DIRS=[[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+
+function seedAndGrow(){
+  animating=true;
+  bloomComplete=false;
+  label.textContent=currentMode.name;
+
+  // Always draw the vector field underneath the bloom
+  const palette=currentPalette;
+  const mode=currentMode;
+  colorGrid=new Array(cols*rows).fill(null);
+
+  fieldSeed=Math.random()*Math.PI*2;
+
+  // Origin is already set by minimap dot — just compute seedCol/Row
+  const seedCol=Math.round(fieldOriginCol);
+  const seedRow=Math.round(fieldOriginRow);
+
+  // ── Seed along streamlines traced from the button origin ──────────────────
+  // Trace multiple streamlines outward, planting seeds along each one.
+  // Seeds are staggered in time (added to frontier at different moments)
+  // so growth erupts sequentially along the flow paths.
+
+  // Derive color directly from field angle at position
+  function fieldColor(fc, fr) {
+    let vx, vy;
+    try { [vx, vy] = mode.fn(fc, fr, fieldOriginCol, fieldOriginRow, fieldSeed); }
+    catch(e) { [vx,vy]=[0,0]; }
+    if (!isFinite(vx)) vx=0;
+    if (!isFinite(vy)) vy=0;
+    const angle = Math.atan2(vy, vx); // -π to π
+    const t = (angle + Math.PI) / (Math.PI * 2); // 0–1
+    return palette[Math.floor(t * palette.length) % palette.length];
+  }
+
+  function sampleFieldNorm(fc, fr) {
+    let vx, vy;
+    try { [vx, vy] = mode.fn(fc, fr, fieldOriginCol, fieldOriginRow, fieldSeed); }
+    catch(e) { [vx,vy]=[0,0]; }
+    if (!isFinite(vx)) vx = 0;
+    if (!isFinite(vy)) vy = 0;
+    const mag = Math.sqrt(vx*vx+vy*vy)+1e-10;
+    return [vx/mag, vy/mag];
+  }
+
+  // Seed a small circle around the origin
+  const btnR = 4; // fixed seed radius in grid cells
+  for(let dr=-btnR; dr<=btnR; dr++){
+    for(let dc=-btnR; dc<=btnR; dc++){
+      if(Math.sqrt(dc*dc+dr*dr)>btnR) continue;
+      const sc=seedCol+dc, sr=seedRow+dr;
+      if(sc<0||sc>=cols||sr<0||sr>=rows) continue;
+      const id=idx(sc,sr);
+      if(!grid[id]){
+        grid[id]=1;
+        const col=fieldColor(sc, sr);
+        colorGrid[id]=col;
+        ctx.fillStyle=col;
+        ctx.fillRect(sc*CELL,sr*CELL,CELL,CELL);
+        frontier.push([sc,sr]);
+      }
+    }
+  }
+
+  // Trace streamlines in many directions from origin, collect seed points
+  // Each streamline gets its own color; seeds stagger so they pop in sequence
+  const NUM_LINES = 36;
+  const STEPS_PER_LINE = 120;
+  const STEP_SIZE = 1.6;
+  const SEED_EVERY = 4; // place a seed every N steps along line
+
+  // We collect deferred seeds: {sc, sr, color, delay}
+  // After bloom starts, a timer reveals them progressively
+  const deferredSeeds = [];
+
+  for (let li = 0; li < NUM_LINES; li++) {
+    // Start each line from origin with a slight angular spread
+    const lineColor = null; // color assigned per-cell from field angle
+    let fc = fieldOriginCol + (Math.random()-0.5)*2;
+    let fr = fieldOriginRow + (Math.random()-0.5)*2;
+
+    for (let s = 0; s < STEPS_PER_LINE; s++) {
+      if (fc<0||fc>=cols||fr<0||fr>=rows) break;
+
+      // Plant a seed every few steps
+      if (s % SEED_EVERY === 0) {
+        const sc = Math.round(fc), sr = Math.round(fr);
+        if (sc>=0&&sc<cols&&sr>=0&&sr<rows) {
+          // Stagger: later steps along line = larger delay
+          deferredSeeds.push({ sc, sr, delay: s * 18 });
+        }
+      }
+
+      // RK2 step
+      const [k1x,k1y] = sampleFieldNorm(fc, fr);
+      const [k2x,k2y] = sampleFieldNorm(fc+k1x*STEP_SIZE*0.5, fr+k1y*STEP_SIZE*0.5);
+      fc += k2x * STEP_SIZE;
+      fr += k2y * STEP_SIZE;
+    }
+  }
+
+  // Fire deferred seeds — each one injects new frontier cells mid-animation
+  deferredSeeds.forEach(({sc, sr, delay}) => {
+    setTimeout(() => {
+      if (!animating) return;
+      const id = idx(sc, sr);
+      if (grid[id]) return;
+      grid[id] = 1;
+      const col = fieldColor(sc, sr);
+      colorGrid[id] = col;
+      ctx.fillStyle = col;
+      ctx.fillRect(sc*CELL, sr*CELL, CELL, CELL);
+      frontier.push([sc, sr]);
+    }, delay);
+  });
+
+  function step(){
+    if(!animating||frontier.length===0){
+      // Frontier empty — flood-fill any uncovered cells so canvas is always full
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const id = idx(c, r);
+          if (!grid[id]) {
+            grid[id] = 1;
+            colorGrid[id] = fieldColor(c, r);
+            ctx.fillStyle = colorGrid[id];
+            ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+          }
+        }
+      }
+      animating=false;
+      bloomComplete=true;
+      saveToHistory();
+      return;
+    }
+
+    // Cubic ease-in: slow start, fast middle, taper at end
+    // t = fraction of canvas filled [0,1]
+    const filled = grid.reduce((s,v)=>s+v,0);
+    const totalCells = cols * rows;
+    const t = Math.min(filled / totalCells, 1);
+    // Cubic ease-in-out: t<0.5 -> 4t³, else 1-(-2t+2)³/2
+    const ease = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2;
+    // Scale from ~10 cells/frame at start up to ~800 at peak, back down
+    const batchSize = Math.max(80, Math.floor(ease * 2700 + 80));
+
+    for(let b=0;b<batchSize&&frontier.length>0;b++){
+      const fi=Math.floor(Math.random()*frontier.length);
+      const [c,r]=frontier[fi];
+
+      // Sample vector field
+      let vx,vy;
+      try {
+        [vx,vy]=mode.fn(c,r,fieldOriginCol,fieldOriginRow,fieldSeed);
+      } catch(e){ [vx,vy]=[0,0]; }
+      if(!isFinite(vx)) vx=0;
+      if(!isFinite(vy)) vy=0;
+
+      // Score dirs by dot product with field vector
+      let scores=DIRS.map(([dc,dr])=>Math.exp((dc*vx+dr*vy)*2.2)+0.08);
+      const total=scores.reduce((a,b)=>a+b,0);
+      let pick=Math.random()*total;
+      let chosen=DIRS[DIRS.length-1];
+      for(let i=0;i<DIRS.length;i++){ pick-=scores[i]; if(pick<=0){chosen=DIRS[i];break;} }
+
+      // Try chosen dir first, then by score
+      const sorted=[...DIRS.map((d,i)=>[d,scores[i]])].sort((a,b)=>b[1]-a[1]);
+      const reordered=[[chosen,0],...sorted.filter(([d])=>d!==chosen)];
+
+      let expanded=false;
+      for(const [[dc,dr]] of reordered){
+        const nc=c+dc, nr=r+dr;
+        if(nc<0||nc>=cols||nr<0||nr>=rows) continue;
+        const nid=idx(nc,nr);
+        if(!grid[nid]){
+          grid[nid]=1;
+          colorGrid[nid]=fieldColor(nc, nr);
+          frontier.push([nc,nr]);
+          ctx.fillStyle=colorGrid[nid];
+          ctx.fillRect(nc*CELL,nr*CELL,CELL,CELL);
+          expanded=true;
+          break;
+        }
+      }
+      if(!expanded) frontier.splice(fi,1);
+    }
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+
+// ─── Live color remap on drag ─────────────────────────────────────────────────
+// After bloom completes, dragging the button shifts the field origin.
+// We re-derive each cell's color from the field angle at the new origin,
+// then redraw the full canvas in one pass.
+function remapColors() {
+  if (!colorGrid || !bloomComplete) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const id = r * cols + c;
+      if (!grid[id]) continue;
+      // Re-derive hue from field angle at new origin
+      let vx, vy;
+      try { [vx, vy] = currentMode.fn(c, r, fieldOriginCol, fieldOriginRow, fieldSeed); }
+      catch(e) { [vx,vy]=[0,0]; }
+      if (!isFinite(vx)) vx=0;
+      if (!isFinite(vy)) vy=0;
+      // Map angle to palette index
+      const angle = Math.atan2(vy, vx); // -π to π
+      const t = (angle + Math.PI) / (Math.PI * 2); // 0 to 1
+      const palIdx = Math.floor(t * currentPalette.length) % currentPalette.length;
+      colorGrid[id] = currentPalette[palIdx];
+      ctx.fillStyle = colorGrid[id];
+      const px = c * CELL, py = r * CELL;
+      const pw = (c === cols - 1) ? canvas.width  - px : CELL;
+      const ph = (r === rows - 1) ? canvas.height - py : CELL;
+      ctx.fillRect(px, py, pw, ph);
+    }
+  }
+}
+
+
+// ─── Generation history ───────────────────────────────────────────────────────
+const MAX_HISTORY = 5;
+let generationHistory = []; // [{mode, fieldSeed, palette, originFrac: [fx,fy]}]
+let activeHistoryIndex = -1; // which history entry is currently displayed
+
+const historyRow  = document.getElementById('historyRow');
+const historyList = document.getElementById('historyList');
+
+function saveToHistory() {
+  const entry = {
+    mode:       currentMode,
+    fieldSeed:  fieldSeed,
+    palette:    [...currentPalette],
+    originFrac: [fieldOriginCol / cols, fieldOriginRow / rows],
+  };
+  // Remove if same mode+seed already exists (dedup)
+  generationHistory = generationHistory.filter(
+    e => !(e.mode === entry.mode && Math.abs(e.fieldSeed - entry.fieldSeed) < 0.001)
+  );
+  generationHistory.unshift(entry);
+  if (generationHistory.length > MAX_HISTORY) generationHistory.pop();
+  activeHistoryIndex = 0;
+  renderHistory();
+}
+
+function renderHistory() {
+  if (generationHistory.length === 0) {
+    historyRow.classList.remove('visible');
+    return;
+  }
+  historyRow.classList.add('visible');
+  historyList.innerHTML = '';
+  generationHistory.forEach((entry, i) => {
+    const item = document.createElement('div');
+    item.className = 'historyItem' + (i === activeHistoryIndex ? ' active-history' : '');
+    item.dataset.index = i;
+
+    // Index number
+    const idx = document.createElement('span');
+    idx.className = 'historyIndex';
+    idx.textContent = i + 1;
+
+    // Swatches
+    const swatches = document.createElement('div');
+    swatches.className = 'historySwatches';
+    entry.palette.forEach(c => {
+      const s = document.createElement('span');
+      s.style.background = c.toLowerCase() === BG.toLowerCase() ? 'rgba(255,255,255,0.08)' : c;
+      s.style.border = c.toLowerCase() === BG.toLowerCase() ? '1px solid rgba(255,255,255,0.15)' : 'none';
+      swatches.appendChild(s);
+    });
+
+    // Name
+    const name = document.createElement('span');
+    name.className = 'historyName';
+    name.textContent = entry.mode.name;
+
+    item.appendChild(idx);
+    item.appendChild(swatches);
+    item.appendChild(name);
+    historyList.appendChild(item);
+  });
+}
+
+historyList.addEventListener('click', e => {
+  const item = e.target.closest('.historyItem');
+  if (!item) return;
+  const i = parseInt(item.dataset.index);
+  const entry = generationHistory[i];
+  if (!entry) return;
+  activeHistoryIndex = i;
+
+  // Restore state
+  currentMode    = entry.mode;
+  fieldSeed      = entry.fieldSeed;
+  currentPalette = [...entry.palette];
+  // Restore origin
+  setDotFrac(entry.originFrac[0], entry.originFrac[1]);
+  label.textContent = currentMode.name;
+  fieldSelect.value = 'random';
+  remapColors();
+  if (debugVisible) drawDebugField();
+  renderHistory();
+});
+
+// ─── Minimap interaction ─────────────────────────────────────────────────────
+const minimapArea     = document.getElementById('minimapArea');
+const minimapDot      = document.getElementById('minimapDot');
+const minimapDotLabel = document.getElementById('minimapDotLabel');
+
+let mmDragging = false;
+let remapRaf = null;
+
+function centerButton() {} // no-op — button lives in minimap now
+
+// Convert minimap px coords → fractional position [0,1]
+function mmPxToFrac(px, py) {
+  const rect = minimapArea.getBoundingClientRect();
+  return [
+    Math.max(0, Math.min(1, (px - rect.left) / rect.width)),
+    Math.max(0, Math.min(1, (py - rect.top)  / rect.height)),
+  ];
+}
+
+// Convert fraction → grid coords
+function fracToGrid(fx, fy) {
+  return [fx * cols, fy * rows];
+}
+
+// Move dot to fraction position inside trackpad
+function setDotFrac(fx, fy) {
+  minimapDot.style.left = (fx * 100) + '%';
+  minimapDot.style.top  = (fy * 100) + '%';
+  const [gc, gr] = fracToGrid(fx, fy);
+  fieldOriginCol = gc;
+  fieldOriginRow = gr;
+  updateCrosshairs(fx, fy);
+}
+
+function updateCrosshairs(fx, fy) {
+  const chV = document.getElementById('minimapCrosshairV');
+  const chH = document.getElementById('minimapCrosshairH');
+  if (chV) chV.style.left = (fx * 100) + '%';
+  if (chH) chH.style.top  = (fy * 100) + '%';
+}
+
+// Draw minimap field preview (streamlines at low res)
+function drawMinimap() { /* no-op: trackpad has no preview */ }
+
+// Update origin from minimap interaction
+let respawnRaf = null;
+function mmSetOrigin(clientX, clientY) {
+  const [fx, fy] = mmPxToFrac(clientX, clientY);
+  setDotFrac(fx, fy);
+  if (bloomComplete && colorGrid) {
+    if (remapRaf) cancelAnimationFrame(remapRaf);
+    remapRaf = requestAnimationFrame(() => {
+      remapColors();
+      if (debugVisible) drawDebugField();
+      // Respawn march particles so they follow the new field origin
+      if (marchActive) {
+        if (respawnRaf) cancelAnimationFrame(respawnRaf);
+        respawnRaf = requestAnimationFrame(() => { spawnMarchParticles(); });
+      }
+    });
+  }
+}
+
+let mmDownX = 0, mmDownY = 0, mmMoved = false;
+// ── Cursor: pointer when hovering over the dot circle, crosshair otherwise ──
+function dotHitTest(clientX, clientY) {
+  const dotRect = minimapDot.getBoundingClientRect();
+  const dotCX = dotRect.left + dotRect.width  / 2;
+  const dotCY = dotRect.top  + dotRect.height / 2;
+  const r = 28; // hit radius — slightly larger than the 44px circle
+  const dx = clientX - dotCX, dy = clientY - dotCY;
+  return Math.sqrt(dx*dx + dy*dy) < r;
+}
+
+minimapArea.addEventListener('mousemove', e => {
+  if (mmDragging) return;
+  minimapArea.style.cursor = dotHitTest(e.clientX, e.clientY) ? 'pointer' : 'crosshair';
+});
+minimapArea.addEventListener('mouseleave', () => {
+  if (!mmDragging) minimapArea.style.cursor = 'crosshair';
+});
+
+// ── Right-click context menu on dot ─────────────────────────────────────────
+const dotMenu     = document.getElementById('dotMenu');
+const menuMarch   = document.getElementById('menuMarch');
+const menuReset   = document.getElementById('menuReset');
+
+function openDotMenu(x, y) {
+  dotMenu.style.left = x + 'px';
+  dotMenu.style.top  = y + 'px';
+  dotMenu.classList.add('open');
+  // Reflect current march state
+  const on = marchToggle.checked;
+  menuMarch.querySelector('.menuIcon').textContent = on ? '●' : '○';
+  menuMarch.textContent = '';
+  const icon = document.createElement('span');
+  icon.className = 'menuIcon';
+  icon.textContent = on ? '●' : '○';
+  menuMarch.appendChild(icon);
+  menuMarch.appendChild(document.createTextNode(on ? ' stop march' : ' march'));
+  menuMarch.classList.toggle('active-item', on);
+}
+
+function closeDotMenu() {
+  dotMenu.classList.remove('open');
+}
+
+minimapArea.addEventListener('contextmenu', e => {
+  if (dotHitTest(e.clientX, e.clientY)) {
+    e.preventDefault();
+    // Nudge menu inside viewport
+    const mx = Math.min(e.clientX, window.innerWidth  - 150);
+    const my = Math.min(e.clientY, window.innerHeight - 80);
+    openDotMenu(mx, my);
+  }
+});
+
+menuMarch.addEventListener('click', () => {
+  const on = !marchToggle.checked;
+  marchToggle.checked = on;
+  syncMarchToggle2();
+  marchSpeedLabel.style.opacity = on ? '1' : '0.3';
+  marchSpeedLabel.style.pointerEvents = on ? 'auto' : 'none';
+  const mmsr = document.getElementById('minimapMarchSpeedRow');
+  if (mmsr) { mmsr.style.opacity = on ? '1' : '0.3'; mmsr.style.pointerEvents = on ? 'auto' : 'none'; }
+  if (on) startMarch(); else stopMarch();
+  minimapDotLabel.textContent = on ? 'marching' : 'generate';
+  minimapDotLabel.style.color = on ? 'rgba(255,255,255,0.9)' : '';
+  closeDotMenu();
+});
+
+menuReset.addEventListener('click', () => {
+  closeDotMenu();
+  if (marchActive) {
+    stopMarch();
+    marchToggle.checked = false;
+    syncMarchToggle2();
+    marchSpeedLabel.style.opacity = '0.3';
+    marchSpeedLabel.style.pointerEvents = 'none';
+    minimapDotLabel.textContent = 'generate';
+    minimapDotLabel.style.color = '';
+  }
+  bloomComplete = false;
+  generationHistory = [];
+  activeHistoryIndex = -1;
+  renderHistory();
+  init();
+  debugCanvas.classList.remove('visible');
+  dctx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+  setDotFrac(0.5, 0.5);
+});
+
+// Close menu on any outside click
+window.addEventListener('mousedown', e => {
+  if (!dotMenu.contains(e.target)) closeDotMenu();
+});
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeDotMenu();
+});
+
+minimapArea.addEventListener('mousedown', e => {
+  if (animating && !bloomComplete) return;
+  mmDragging = true; mmMoved = false;
+  mmDownX = e.clientX; mmDownY = e.clientY;
+  minimapDot.classList.add('active');
+  minimapArea.style.cursor = 'grabbing';
+  mmSetOrigin(e.clientX, e.clientY);
+  e.preventDefault();
+});
+minimapArea.addEventListener('touchstart', e => {
+  if (animating && !bloomComplete) return;
+  mmDragging = true; mmMoved = false;
+  mmDownX = e.touches[0].clientX; mmDownY = e.touches[0].clientY;
+  minimapDot.classList.add('active');
+  mmSetOrigin(e.touches[0].clientX, e.touches[0].clientY);
+  e.preventDefault();
+}, {passive:false});
+
+window.addEventListener('mousemove', e => {
+  if (!mmDragging) return;
+  const dx = e.clientX - mmDownX, dy = e.clientY - mmDownY;
+  if (Math.sqrt(dx*dx+dy*dy) > 4) mmMoved = true;
+  mmSetOrigin(e.clientX, e.clientY);
+});
+window.addEventListener('touchmove', e => {
+  if (!mmDragging) return;
+  const dx = e.touches[0].clientX - mmDownX, dy = e.touches[0].clientY - mmDownY;
+  if (Math.sqrt(dx*dx+dy*dy) > 4) mmMoved = true;
+  mmSetOrigin(e.touches[0].clientX, e.touches[0].clientY);
+  e.preventDefault();
+},{passive:false});
+
+// ── Double-click / double-tap to bloom ──────────────────────────────────────
+let mmLastTap = 0;
+const DBL_MS  = 380;
+let mmPrimedTimer = null;
+const minimapDotCanvas = document.getElementById('minimapDotCanvas');
+
+function randomizeSimplifiedControls() {
+  // Only randomize when panel is collapsed (simplified view)
+  if (minimap.classList.contains('expanded')) return;
+
+  // Density — random between 4 and 12
+  const newDensity = Math.floor(Math.random() * 9) + 4;
+  CELL = newDensity;
+  pixelSlider.value = newDensity;
+  pixelVal.textContent = newDensity + 'px';
+  drawButton();
+
+  // March — 50% chance on, 50% off
+  const shouldMarch = Math.random() > 0.5;
+  if (shouldMarch !== marchToggle.checked) {
+    marchToggle.checked = shouldMarch;
+    syncMarchToggle2();
+    marchToggle.dispatchEvent(new Event('change'));
+  }
+
+  // March speed — random 2–8 if marching
+  if (shouldMarch) {
+    const newSpeed = Math.floor(Math.random() * 7) + 2;
+    marchSpeedEl.value = newSpeed;
+  }
+}
+
+function fireBloom() {
+  if (animating && !bloomComplete) return;
+
+  if (bloomComplete) {
+    randomizeSimplifiedControls();
+    // Already have a full canvas — just shift to a new field variation in place
+    currentMode = FIELD_MODES[Math.floor(Math.random() * FIELD_MODES.length)];
+    fieldSeed = Math.random() * Math.PI * 2;
+    currentPalette = pickPalette();
+    label.textContent = currentMode.name;
+    fieldSelect.value = 'random';
+    remapColors();
+    if (debugVisible) drawDebugField();
+    saveToHistory();
+    minimapDotLabel.textContent = 'generated';
+    minimapDotLabel.style.color = 'rgba(255,255,255,0.9)';
+    clearTimeout(mmPrimedTimer);
+    mmPrimedTimer = setTimeout(resetLabel, 1800);
+    return;
+  }
+
+  randomizeSimplifiedControls();
+  // First generation — bloom from scratch
+  seedAndGrow();
+  minimapDotLabel.textContent = 'generated';
+  minimapDotLabel.style.color = 'rgba(255,255,255,0.9)';
+  clearTimeout(mmPrimedTimer);
+  mmPrimedTimer = setTimeout(resetLabel, 1800);
+}
+
+function baseLabel() {
+  return marchToggle.checked ? 'marching' : 'generate';
+}
+function baseColor() {
+  return marchToggle.checked ? 'rgba(255,255,255,0.9)' : '';
+}
+function resetLabel() {
+  minimapDotLabel.textContent = baseLabel();
+  minimapDotLabel.style.color = baseColor();
+}
+
+function setPrimed(on) {
+  clearTimeout(mmPrimedTimer);
+  if (on) {
+    drawButton('primed');
+    minimapDotLabel.textContent = 'confirm?';
+    minimapDotLabel.style.color = 'rgba(255,255,255,0.75)';
+    mmPrimedTimer = setTimeout(() => {
+      drawButton('default');
+      resetLabel();
+      mmLastTap = 0;
+    }, DBL_MS);
+  } else {
+    // Briefly show confirm state before bloom fires
+    drawButton('confirm');
+    minimapDotLabel.textContent = 'confirm?';
+    mmLastTap = 0;
+    // Return to default after short flash
+    setTimeout(() => {
+      drawButton('default');
+    }, 600);
+  }
+}
+
+window.addEventListener('mouseup', () => {
+  if (!mmDragging) return;
+  mmDragging = false;
+  minimapDot.classList.remove('active');
+  minimapArea.style.cursor = 'crosshair';
+  if (mmMoved) return; // drag — don't count as tap
+  const now = Date.now();
+  if (mmLastTap && now - mmLastTap < DBL_MS) {
+    setPrimed(false);
+    fireBloom();
+  } else {
+    mmLastTap = now;
+    setPrimed(true);
+  }
+});
+
+window.addEventListener('touchend', e => {
+  if (!mmDragging) return;
+  mmDragging = false;
+  minimapDot.classList.remove('active');
+  if (mmMoved) return;
+  const now = Date.now();
+  if (mmLastTap && now - mmLastTap < DBL_MS) {
+    setPrimed(false);
+    fireBloom();
+  } else {
+    mmLastTap = now;
+    setPrimed(true);
+  }
+});
+
+
+
+window.addEventListener('resize', () => {
+  if (!animating) { init(); if(debugVisible) drawDebugField(); }
+  if (themePanel.classList.contains('open')) positionThemePanel();
+});
+
+// ─── Controls overlay ─────────────────────────────────────────────────────────
+const fieldSelect  = document.getElementById('fieldSelect2');
+// pixelSlider now lives in minimap — use the new element IDs
+const pixelSlider  = document.getElementById('pixelSlider2');
+const pixelVal     = document.getElementById('pixelVal2');
+
+// ── Theme panel ──────────────────────────────────────────────────────────────
+const themeRow            = document.getElementById('themeRow');
+const themeTrigger        = document.getElementById('themeTrigger');
+const themePanel          = document.getElementById('themePanel');
+const themeTriggerLabel   = document.getElementById('themeTriggerLabel');
+const themeTriggerSwatches= document.getElementById('themeTriggerSwatches');
+
+// Group definitions — indices into THEMES array
+const THEME_GROUPS = [
+  { label: 'monotone', indices: [0,1,2,3] },     // halogen, amber, cryogen, moss
+  { label: 'complex',  indices: [4,5,6,7,8] },   // refraction, strata, thermal, abyss, risograph
+];
+
+function buildSwatchRow(colors) {
+  const wrap = document.createElement('span');
+  wrap.className = 'tpSwatches';
+  colors.forEach(c => {
+    const s = document.createElement('span');
+    s.style.background = c;
+    s.style.border = c.toLowerCase() === BG.toLowerCase() ? '1px solid rgba(255,255,255,0.2)' : 'none';
+    wrap.appendChild(s);
+  });
+  return wrap;
+}
+
+function buildThemePanel() {
+  themePanel.innerHTML = '';
+
+  // Random option
+  const randomItem = document.createElement('div');
+  randomItem.className = 'themePanelItem' + (currentTheme === null ? ' selected' : '');
+  randomItem.dataset.idx = 'random';
+  const rName = document.createElement('span'); rName.className = 'tpName'; rName.textContent = '— random —';
+  randomItem.appendChild(rName);
+  themePanel.appendChild(randomItem);
+  themePanel.appendChild(Object.assign(document.createElement('div'), { className: 'themePanelDivider' }));
+
+  THEME_GROUPS.forEach(group => {
+    const sec = document.createElement('div');
+    sec.className = 'themePanelSection';
+    sec.textContent = group.label;
+    themePanel.appendChild(sec);
+
+    group.indices.forEach(i => {
+      const theme = THEMES[i];
+      const item = document.createElement('div');
+      item.className = 'themePanelItem' + (currentTheme === theme ? ' selected' : '');
+      item.dataset.idx = i;
+      const name = document.createElement('span'); name.className = 'tpName'; name.textContent = theme.name;
+      item.appendChild(name);
+      item.appendChild(buildSwatchRow(theme.colors));
+      themePanel.appendChild(item);
+    });
+
+    themePanel.appendChild(Object.assign(document.createElement('div'), { className: 'themePanelDivider' }));
+  });
+}
+
+function updateTrigger() {
+  themeTriggerLabel.textContent = currentTheme ? currentTheme.name : 'theme';
+  themeTriggerSwatches.innerHTML = '';
+  if (currentTheme) {
+    buildSwatchRow(currentTheme.colors).childNodes.forEach(n =>
+      themeTriggerSwatches.appendChild(n.cloneNode(true)));
+  }
+}
+
+function positionThemePanel() {
+  const rowRect = themeRow.getBoundingClientRect();
+  const panelW = 210;
+  let left = rowRect.right + 6;
+  let top  = rowRect.top;
+  if (left + panelW > window.innerWidth - 8) left = rowRect.left - panelW - 6;
+  if (top + 320 > window.innerHeight - 8) top = window.innerHeight - 328;
+  themePanel.style.left = left + 'px';
+  themePanel.style.top  = Math.max(8, top) + 'px';
+}
+
+function openThemePanel() {
+  buildThemePanel();
+  positionThemePanel();
+  themePanel.classList.add('open');
+  themeRow.classList.add('open');
+}
+
+function closeThemePanel() {
+  themePanel.classList.remove('open');
+  themeRow.classList.remove('open');
+}
+
+themeRow.addEventListener('click', e => {
+  themePanel.classList.contains('open') ? closeThemePanel() : openThemePanel();
+});
+
+themePanel.addEventListener('click', e => {
+  const item = e.target.closest('.themePanelItem');
+  if (!item) return;
+  const v = item.dataset.idx;
+  currentTheme = v === 'random' ? null : THEMES[parseInt(v)];
+  if (bloomComplete && colorGrid) {
+    currentPalette = pickPalette();
+    remapColors();
+    if (debugVisible) drawDebugField();
+  }
+  updateTrigger();
+  closeThemePanel();
+});
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeThemePanel();
+});
+window.addEventListener('mousedown', e => {
+  if (themePanel.classList.contains('open') &&
+      !themePanel.contains(e.target) &&
+      !themeRow.contains(e.target)) {
+    closeThemePanel();
+  }
+}, true);
+
+updateTrigger();
+
+// Populate select with current random selection highlighted
+fieldSelect.value = 'random';
+
+fieldSelect.addEventListener('change', () => {
+  const v = fieldSelect.value;
+  if (v === 'random') {
+    currentMode = FIELD_MODES[Math.floor(Math.random() * FIELD_MODES.length)];
+  } else {
+    currentMode = FIELD_MODES[parseInt(v)];
+  }
+  label.textContent = currentMode.name;
+  if (bloomComplete && colorGrid) {
+    remapColors();
+    if (debugVisible) drawDebugField();
+  }
+});
+
+pixelSlider.addEventListener('input', () => {
+  const newCell = parseInt(pixelSlider.value);
+  pixelVal.textContent = newCell + 'px';
+  if (newCell === CELL) return;
+  CELL = newCell;
+  // Redraw button at new cell size
+  drawButton();
+  // If bloom is done, re-render canvas at new density
+  if (bloomComplete && colorGrid) {
+    // Recompute grid dimensions
+    resize();
+    // Rebuild grid and colorGrid at new resolution, redraw
+    const newGrid = new Uint8Array(cols * rows);
+    const newColorGrid = new Array(cols * rows).fill(null);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Fill full canvas — use pixel dimensions to guarantee no gaps at edges
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        newGrid[r * cols + c] = 1;
+        const col = fieldColor_static(c, r);
+        newColorGrid[r * cols + c] = col;
+        ctx.fillStyle = col;
+        // Use +1 on size to avoid sub-pixel gaps between cells
+        const px = c * CELL, py = r * CELL;
+        const pw = (c === cols - 1) ? canvas.width - px : CELL;
+        const ph = (r === rows - 1) ? canvas.height - py : CELL;
+        ctx.fillRect(px, py, pw, ph);
+      }
+    }
+    grid = newGrid;
+    colorGrid = newColorGrid;
+    if (debugVisible) drawDebugField();
+  } else if (!animating) {
+    // Not bloomed yet — just reset cleanly
+    init();
+  }
+});
+
+// Static version of fieldColor that doesn't need to be inside seedAndGrow closure
+function fieldColor_static(fc, fr) {
+  let vx, vy;
+  try { [vx, vy] = currentMode.fn(fc, fr, fieldOriginCol, fieldOriginRow, fieldSeed); }
+  catch(e) { [vx,vy]=[0,0]; }
+  if (!isFinite(vx)) vx=0;
+  if (!isFinite(vy)) vy=0;
+  const angle = Math.atan2(vy, vx);
+  const t = (angle + Math.PI) / (Math.PI * 2);
+  return currentPalette[Math.floor(t * currentPalette.length) % currentPalette.length];
+}
+
+// Keep remapColors also using static version
+const _origRemapColors = remapColors;
+remapColors = function() {
+  if (!colorGrid || !bloomComplete) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const id = r * cols + c;
+      if (!grid[id]) continue;
+      const col = fieldColor_static(c, r);
+      colorGrid[id] = col;
+      ctx.fillStyle = col;
+      ctx.fillRect(c * CELL, r * CELL, CELL, CELL);
+    }
+  }
+};
+
+
+
+// ─── Debug vector field overlay ───────────────────────────────────────────────
+const debugCanvas = document.getElementById('debugCanvas');
+const dctx = debugCanvas.getContext('2d');
+const debugBtn = { classList: { toggle: ()=>{}, remove: ()=>{} }, textContent: '' }; // removed
+let debugVisible = false;
+const DEBUG_STREAMLINE_SEEDS = 320;  // number of streamlines
+const DEBUG_STREAMLINE_STEPS = 80;   // steps to trace each line
+const DEBUG_STEP_SIZE = 1.8;         // grid cells per integration step
+
+function drawDebugField() {
+  debugCanvas.width = window.innerWidth;
+  debugCanvas.height = window.innerHeight;
+  dctx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
+
+  const ox = fieldOriginCol, oy = fieldOriginRow;
+  const mode = currentMode;
+  const seed = fieldSeed;
+
+  // Dim background tint so streamlines pop
+  dctx.fillStyle = 'rgba(0,0,0,0.45)';
+  dctx.fillRect(0, 0, debugCanvas.width, debugCanvas.height);
+
+  // Sample field vector at fractional grid position
+  function sampleField(fc, fr) {
+    let vx, vy;
+    try { [vx, vy] = mode.fn(fc, fr, ox, oy, seed); } catch(e) { [vx,vy]=[0,0]; }
+    if (!isFinite(vx)) vx = 0;
+    if (!isFinite(vy)) vy = 0;
+    const mag = Math.sqrt(vx*vx + vy*vy) + 1e-10;
+    return [vx/mag, vy/mag];
+  }
+
+  // Seed streamlines on a jittered grid for even coverage
+  const gridN = Math.round(Math.sqrt(DEBUG_STREAMLINE_SEEDS));
+  for (let gi = 0; gi < gridN; gi++) {
+    for (let gj = 0; gj < gridN; gj++) {
+      // Jittered start in grid coords
+      const sc = (gj / gridN) * cols + (Math.random() - 0.5) * (cols / gridN);
+      const sr = (gi / gridN) * rows + (Math.random() - 0.5) * (rows / gridN);
+
+      // Trace streamline by RK2 (midpoint method) integration
+      const pts = [];
+      let fc = sc, fr = sr;
+      for (let s = 0; s < DEBUG_STREAMLINE_STEPS; s++) {
+        if (fc < 0 || fc >= cols || fr < 0 || fr >= rows) break;
+        pts.push([fc * CELL + CELL/2, fr * CELL + CELL/2]);
+
+        // RK2: sample at midpoint for smoother curves
+        const [k1x, k1y] = sampleField(fc, fr);
+        const mc = fc + k1x * DEBUG_STEP_SIZE * 0.5;
+        const mr = fr + k1y * DEBUG_STEP_SIZE * 0.5;
+        const [k2x, k2y] = sampleField(mc, mr);
+
+        fc += k2x * DEBUG_STEP_SIZE;
+        fr += k2y * DEBUG_STEP_SIZE;
+      }
+
+      if (pts.length < 3) continue;
+
+      // Color by starting angle
+      const [vx0, vy0] = sampleField(sc, sr);
+      const angle = Math.atan2(vy0, vx0);
+      const hue = ((angle / (Math.PI * 2)) * 360 + 360) % 360;
+
+      // Draw as smooth path with tapered alpha
+      dctx.beginPath();
+      dctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) {
+        // Smooth through midpoints
+        const mx = (pts[i][0] + pts[i-1][0]) / 2;
+        const my = (pts[i][1] + pts[i-1][1]) / 2;
+        dctx.quadraticCurveTo(pts[i-1][0], pts[i-1][1], mx, my);
+      }
+
+      dctx.strokeStyle = `hsla(${hue}, 85%, 65%, 0.55)`;
+      dctx.lineWidth = 1.2;
+      dctx.stroke();
+
+      // Arrowhead at end of streamline
+      if (pts.length >= 2) {
+        const tip = pts[pts.length - 1];
+        const prev = pts[pts.length - 2];
+        const a = Math.atan2(tip[1] - prev[1], tip[0] - prev[0]);
+        const hl = 7, ha = 0.5;
+        dctx.fillStyle = `hsla(${hue}, 85%, 70%, 0.8)`;
+        dctx.beginPath();
+        dctx.moveTo(tip[0], tip[1]);
+        dctx.lineTo(tip[0] - hl*Math.cos(a-ha), tip[1] - hl*Math.sin(a-ha));
+        dctx.lineTo(tip[0] - hl*Math.cos(a+ha), tip[1] - hl*Math.sin(a+ha));
+        dctx.closePath();
+        dctx.fill();
+      }
+    }
+  }
+
+  // Origin crosshair
+  const opx = ox * CELL, opy = oy * CELL;
+  dctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  dctx.lineWidth = 1.5;
+  dctx.setLineDash([4,4]);
+  dctx.beginPath(); dctx.moveTo(opx-20,opy); dctx.lineTo(opx+20,opy); dctx.stroke();
+  dctx.beginPath(); dctx.moveTo(opx,opy-20); dctx.lineTo(opx,opy+20); dctx.stroke();
+  dctx.setLineDash([]);
+
+  // Origin dot
+  dctx.fillStyle = 'rgba(255,255,255,0.9)';
+  dctx.beginPath(); dctx.arc(opx, opy, 3.5, 0, Math.PI*2); dctx.fill();
+
+  // Mode name
+  dctx.font = '11px "Space Mono", monospace';
+  dctx.fillStyle = 'rgba(255,255,255,0.35)';
+  dctx.textAlign = 'left';
+  dctx.fillText(currentMode.name, 14, debugCanvas.height - 14);
+}
+
+// debug button removed
+
+// Redraw debug overlay whenever button is dragged
+const _origMouseMove = window.__debugMouseMove;
+window.addEventListener('mousemove', () => {
+  if (debugVisible && dragging) drawDebugField();
+});
+
+init();
+setDotFrac(0.5, 0.5); // start origin at center
+drawMinimap();
+
+// ─── Pixel marching ───────────────────────────────────────────────────────────
+// Particles follow the vector field, leaving a fading trail.
+// Each particle: { fc, fr, life }
+// They spawn across the filled canvas and march along field vectors.
+
+let marchActive = false;
+let marchDissolving = false; // true when particles are homing to bloom pixels
+let marchParticles = [];
+let marchRaf = null;
+let marchCanvas, mctx;
+let marchFrame = 0;          // global frame counter, resets each loop period
+const LOOP_FRAMES = 180;     // 6s @ 30fps — one perfect loop period
+
+const marchToggle   = document.getElementById('marchToggle');
+const marchToggle2  = document.getElementById('marchToggle2');
+
+// Sync visible toggle (marchToggle2) ↔ hidden logic toggle (marchToggle)
+marchToggle2.addEventListener('change', () => {
+  marchToggle.checked = marchToggle2.checked;
+  marchToggle.dispatchEvent(new Event('change'));
+});
+// Keep marchToggle2 in sync if marchToggle is changed programmatically
+const _origMarchCheckedDesc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked');
+// Simpler: patch all places that set marchToggle.checked to also update marchToggle2
+function syncMarchToggle2() {
+  if (marchToggle2) marchToggle2.checked = marchToggle.checked;
+}
+const marchSpeedEl  = document.getElementById('marchSpeed2');
+const marchSpeedLabel = document.getElementById('minimapMarchSpeedRow');
+
+// Off-screen canvas for march trails
+function ensureMarchCanvas() {
+  if (!marchCanvas) {
+    marchCanvas = document.createElement('canvas');
+    marchCanvas.style.cssText = `
+      position:fixed;top:0;left:0;width:100vw;height:100vh;
+      pointer-events:none;z-index:3;
+`;
+    document.body.appendChild(marchCanvas);
+  }
+  marchCanvas.width  = window.innerWidth;
+  marchCanvas.height = window.innerHeight;
+  mctx = marchCanvas.getContext('2d');
+}
+
+function spawnMarchParticles() {
+  marchParticles = [];
+  marchFrame = 0;
+  const count = Math.floor((cols * rows) * 0.012);
+  const speed = parseInt(marchSpeedEl.value) * 0.15;
+
+  for (let i = 0; i < count; i++) {
+    const phase = i / count; // evenly distributed 0→1
+
+    // Each particle pre-integrates its trajectory for LOOP_FRAMES steps
+    // starting from a random spawn point, so we can index into it by frame
+    const path = [];
+    let fc = Math.random() * cols;
+    let fr = Math.random() * rows;
+    for (let f = 0; f < LOOP_FRAMES; f++) {
+      path.push([fc, fr]);
+      let vx, vy;
+      try { [vx, vy] = currentMode.fn(fc, fr, fieldOriginCol, fieldOriginRow, fieldSeed); }
+      catch(e) { [vx,vy]=[0,0]; }
+      if (!isFinite(vx)) vx=0;
+      if (!isFinite(vy)) vy=0;
+      const mag = Math.sqrt(vx*vx+vy*vy)+1e-10;
+      vx /= mag; vy /= mag;
+      fc += vx * speed;
+      fr += vy * speed;
+      // Wrap at edges so path is truly periodic
+      fc = ((fc % cols) + cols) % cols;
+      fr = ((fr % rows) + rows) % rows;
+    }
+
+    marchParticles.push({
+      path,
+      phase,                 // fractional phase offset into loop
+      phaseFrames: Math.round(phase * LOOP_FRAMES),
+      // Dissolve fields
+      tc: null, tr: null,
+      dissolveT: 0,
+      startFc: 0, startFr: 0,
+    });
+  }
+}
+
+// Find the nearest filled bloom cell to a particle position
+function nearestFilledCell(fc, fr) {
+  // Search in expanding rings — fast for dense fills
+  const sc = Math.round(fc), sr = Math.round(fr);
+  for (let r = 0; r <= 20; r++) {
+    for (let dr = -r; dr <= r; dr++) {
+      for (let dc = -r; dc <= r; dc++) {
+        if (Math.abs(dr) !== r && Math.abs(dc) !== r) continue; // ring only
+        const c2 = sc + dc, r2 = sr + dr;
+        if (c2 < 0 || c2 >= cols || r2 < 0 || r2 >= rows) continue;
+        if (grid[idx(c2, r2)]) return [c2, r2];
+      }
+    }
+  }
+  return [sc, sr]; // fallback
+}
+
+function stepMarch() {
+  if (!marchActive && !marchDissolving) return;
+  const baseSpeed = parseInt(marchSpeedEl.value) * 0.15;
+  const DISSOLVE_SPEED = 0.055; // lerp step per frame toward target cell
+
+  mctx.fillStyle = 'rgba(10,10,10,0.18)';
+  mctx.fillRect(0, 0, marchCanvas.width, marchCanvas.height);
+
+  let anyAlive = false;
+
+  for (let i = marchParticles.length - 1; i >= 0; i--) {
+    const p = marchParticles[i];
+
+    if (marchDissolving) {
+      // Assign target on first dissolve frame
+      if (p.tc === null) {
+        const frameIdx = (marchFrame + p.phaseFrames) % LOOP_FRAMES;
+        const [cfc, cfr] = p.path[frameIdx];
+        const [tc, tr] = nearestFilledCell(cfc, cfr);
+        p.tc = tc; p.tr = tr;
+        p.startFc = cfc; p.startFr = cfr;
+        p.dissolveT = 0;
+      }
+      // Ease toward target
+      p.dissolveT = Math.min(1, p.dissolveT + DISSOLVE_SPEED);
+      const ease = p.dissolveT < 0.5
+        ? 2 * p.dissolveT * p.dissolveT
+        : 1 - Math.pow(-2 * p.dissolveT + 2, 2) / 2;
+      p.fc = p.startFc + (p.tc - p.startFc) * ease;
+      p.fr = p.startFr + (p.tr - p.startFr) * ease;
+
+      const px = Math.floor(p.fc) * CELL;
+      const py = Math.floor(p.fr) * CELL;
+      // Fade alpha as it homes in
+      const alpha = (1 - ease) * 0.85;
+
+      const angle = Math.atan2(p.tr - p.startFr, p.tc - p.startFc);
+      const t2 = (angle + Math.PI) / (Math.PI * 2);
+      const col = currentPalette[Math.floor(t2 * currentPalette.length) % currentPalette.length];
+
+      if (col !== BG && alpha > 0.01) {
+        mctx.globalAlpha = alpha;
+        mctx.fillStyle = col;
+        mctx.fillRect(px, py, CELL, CELL);
+        anyAlive = true;
+      }
+
+      if (p.dissolveT >= 1) marchParticles.splice(i, 1);
+      continue;
+    }
+
+    // ── Normal march — phase-locked path lookup ────────────────────────
+    // Current frame index into this particle's pre-integrated path
+    const frameIdx = (marchFrame + p.phaseFrames) % LOOP_FRAMES;
+    const [fc, fr] = p.path[frameIdx];
+
+    // Direction vector for color derivation (difference to next frame)
+    const nextIdx = (frameIdx + 1) % LOOP_FRAMES;
+    const [nfc, nfr] = p.path[nextIdx];
+    const dvx = nfc - fc, dvy = nfr - fr;
+
+    const px = Math.floor(fc) * CELL;
+    const py = Math.floor(fr) * CELL;
+
+    // Alpha envelope: fade in over first 20% of loop, fade out over last 20%
+    const cyclePos = frameIdx / LOOP_FRAMES;
+    const fadeIn  = Math.min(1, cyclePos / 0.2);
+    const fadeOut = Math.min(1, (1 - cyclePos) / 0.2);
+    const alpha   = Math.min(fadeIn, fadeOut) * 0.85;
+
+    const angle = Math.atan2(dvy, dvx);
+    const t = (angle + Math.PI) / (Math.PI * 2);
+    const baseColor = currentPalette[Math.floor(t * currentPalette.length) % currentPalette.length];
+
+    if (baseColor !== BG && alpha > 0.01) {
+      mctx.globalAlpha = alpha;
+      mctx.fillStyle = baseColor;
+      mctx.fillRect(px, py, CELL, CELL);
+      anyAlive = true;
+    }
+  }
+
+  marchFrame = (marchFrame + 1) % LOOP_FRAMES;
+  mctx.globalAlpha = 1;
+
+  if (marchDissolving && marchParticles.length === 0) {
+    marchDissolving = false;
+    marchRaf = null;
+    mctx.clearRect(0, 0, marchCanvas.width, marchCanvas.height);
+    return;
+  }
+
+  marchRaf = requestAnimationFrame(stepMarch);
+}
+
+function startMarch() {
+  if (marchRaf) cancelAnimationFrame(marchRaf);
+  ensureMarchCanvas();
+  marchDissolving = false;
+  spawnMarchParticles();
+  marchActive = true;
+  marchCanvas.style.opacity = '1';
+  marchRaf = requestAnimationFrame(stepMarch);
+}
+
+function stopMarch() {
+  marchActive = false;
+  marchDissolving = true;
+  // Reset dissolve state on all live particles
+  marchParticles.forEach(p => { p.tc = null; p.dissolveT = 0; });
+  if (!marchRaf && marchParticles.length > 0) {
+    marchRaf = requestAnimationFrame(stepMarch);
+  }
+}
+
+marchToggle.addEventListener('change', () => {
+  const on = marchToggle.checked;
+  marchSpeedLabel.style.opacity = on ? '1' : '0.3';
+  marchSpeedLabel.style.pointerEvents = on ? 'auto' : 'none';
+  const mmsr = document.getElementById('minimapMarchSpeedRow');
+  if (mmsr) { mmsr.style.opacity = on ? '1' : '0.3'; mmsr.style.pointerEvents = on ? 'auto' : 'none'; }
+  if (on) startMarch();
+  else stopMarch();
+});
+
+// Restart march on new bloom or remap
+const _origSeedAndGrow = seedAndGrow;
+// patch: after each init, restart march if active
+const _origInit = init;
+init = function() {
+  // Keep march running continuously — bloom paints over it naturally
+  _origInit();
+};
+
+
+// ─── Save / Export ────────────────────────────────────────────────────────────
+
+function compositeFrame() {
+  // Flatten all visible layers onto one offscreen canvas
+  const out = document.createElement('canvas');
+  out.width  = canvas.width;
+  out.height = canvas.height;
+  const octx = out.getContext('2d');
+  // Background
+  octx.fillStyle = '#0a0a0a';
+  octx.fillRect(0, 0, out.width, out.height);
+  // Bloom layer
+  octx.drawImage(canvas, 0, 0);
+  // March layer (if visible)
+  if (marchCanvas && marchActive) octx.drawImage(marchCanvas, 0, 0);
+  return out;
+}
+
+// ── Still image ───────────────────────────────────────────────────────────────
+const saveImageBtn = document.getElementById('saveImageBtn');
+saveImageBtn.addEventListener('mouseenter', () => { saveImageBtn.style.color='#fff'; saveImageBtn.style.background='rgba(255,255,255,0.12)'; });
+saveImageBtn.addEventListener('mouseleave', () => { saveImageBtn.style.color='rgba(255,255,255,0.6)'; saveImageBtn.style.background='rgba(255,255,255,0.06)'; });
+
+saveImageBtn.addEventListener('click', () => {
+  if (!bloomComplete && !animating) return;
+  try {
+    const out = compositeFrame();
+    const dataURL = out.toDataURL('image/png');
+    // Try anchor download first
+    const a = document.createElement('a');
+    a.href = dataURL;
+    a.download = 'bloom-' + Date.now() + '.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch(e) {
+    // Fallback: open in new tab so user can save manually
+    const out = compositeFrame();
+    const dataURL = out.toDataURL('image/png');
+    const win = window.open();
+    if (win) {
+      win.document.write('<img src="' + dataURL + '" style="max-width:100%;display:block;">');
+      win.document.title = 'bloom — save with right-click';
+    }
+  }
+});
+
+
+// ─── Panel expand / collapse ──────────────────────────────────────────────────
+const panelExpandBtn  = document.getElementById('panelExpandBtn');
+const panelSaveSimple = document.getElementById('panelSaveSimple');
+const minimap         = document.getElementById('minimap');
+
+panelExpandBtn.addEventListener('click', () => {
+  minimap.classList.toggle('expanded');
+  // Reposition theme panel if it's open
+  if (document.getElementById('themePanel').classList.contains('open')) positionThemePanel();
+});
+
+// Simple save button mirrors the full save image button
+panelSaveSimple.addEventListener('click', () => {
+  document.getElementById('saveImageBtn').click();
+});
+
+</script>
+</body>
+</html>
